@@ -58,8 +58,11 @@ async function gasLoad(url){
   return j.data;
 }
 function gasSave(url,key,value){
-  // no-cors: CORS preflight 없이 GAS에 POST 전송 (응답은 읽지 않음)
-  fetch(url,{method:"POST",mode:"no-cors",body:JSON.stringify({key,value})});
+  // FormData + no-cors: GAS의 e.parameter 로 수신되는 가장 안정적인 방식
+  var fd = new FormData();
+  fd.append("key", key);
+  fd.append("value", JSON.stringify(value));
+  fetch(url, {method:"POST", mode:"no-cors", body:fd});
 }
 
 /* ── Badge ──────────────────────────────────────────── */
