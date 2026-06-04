@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>HR 이슈 트래커</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans KR', sans-serif; background: #f8fafc; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+const EMP_TYPES = ["정규직","계약직","인턴"];
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,5);
+const todayStr = () => new Date().toISOString().slice(0,10);
+const fmtMD = d => { const [,m,day]=d.split("-"); return `${m}/${day}`; };
+const getDates = n => {
+  const a=[];
+  for(let i=n-1;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);a.push(d.toISOString().slice(0,10));}
+  return a;
+};
+
+const D_TEAMS=[{id:"t1",name:"경영지원팀"},{id:"t2",name:"마케팅팀"},{id:"t3",name:"MD팀"},{id:"t4",name:"운영팀"},{id:"t5",name:"고객서비스팀"}];
+const D_MEMBERS=[
+  {id:"m1",teamId:"t1",name:"홍길동",type:"정규직"},{id:"m2",teamId:"t1",name:"김영희",type:"정규직"},
+  {id:"m3",teamId:"t2",name:"이철수",type:"정규직"},{id:"m4",teamId:"t2",name:"박지영",type:"인턴"},
+  {id:"m5",teamId:"t3",name:"최민수",type:"정규직"},{id:"m6",teamId:"t3",name:"정수진",type:"계약직"},
+  {id:"m7",teamId:"t4",name:"강현우",type:"정규직"},{id:"m8",teamId:"t5",name:"윤지현",type:"정규직"}
+];
+const D_CATS=[
+  {id:"c1",name:"휴가/휴직",color:"#3b82f6"},{id:"c2",name:"성과 이슈",color:"#ef4444"},
+  {id:"c3",name:"온보딩",color:"#10b981"},{id:"c4",name:"계약/퇴직",color:"#f59e0b"},
+  {id:"c5",name:"면담/상담",color:"#8b5cf6"},{id:"c6",name:"징계",color:"#dc2626"},
+  {id:"c7",name:"기타",color:"#6b7280"}
+];
+const PALETTE=["#3b82f6","#ef4444","#10b981","#f59e0b","#8b5cf6","#dc2626","#06b6d4","#ec4899","#f97316","#84cc16","#14b8a6","#6b7280"];
+
+const ls = {
+  get: k => { try { const v=localStorage.getItem(k); return v?JSON.parse(v):null; } catch { return null; } },
+  set: (k,v) => { try { localStorage.setItem(k,JSON.stringify(v)); } catch {} }
+};
+
+const Badge = ({type}) => {
+  const cls = type==="정규직"?"background:#dbeafe;color:#1d4ed8":type==="인턴"?"background:#d1fae5;color:#065f46":"background:#ffedd5;color:#c2410c";
+  return <span style={{fontSize:'11px',padding:'2px 6px',borderRadius:9999,fontWeight:600,...Object.fromEntries(cls.split(";").map(s=>s.split(":").map(x=>x.trim())).filter(a=>a.length===2).map(([k,v])=>[k.replace(/-([a-z])/g,(_,c)=>c.toUpperCase()),v]))}}>{type}</span>;
+};
+
+// ── APP ───────────────────────────────────────────────
+function App() {
+  const [tab, setTab] = useState("dashboard");
+  const [teams, setTeams] = useState(D_TEAMS);
+  const [members, setMembers] = useState(D_MEMBERS);
+  const [cats, setCats] = useState(D_CATS);
+  const [issues, setIssues] = useState([]);
+
+  useEffect(() => {
+    const t=ls.get("hr2_teams"),m=ls.get("hr2_members"),c=ls.get("hr2_cats"),i=ls.get("hr2_issues");
+    if(t) setTeams(t); if(m) setMembers(m); if(c) setCats(c); if(i) setIssues(i);
+  }, []);
+
+  const upT=d=>{setTeams(d);ls.set("hr2_teams",d);};
+  const upM=d=>{setMembers(d);ls.set("hr2_members",d);};
+  const upC=d=>{setCats(d);ls.set("hr2_cats",d);};
+  const upI=d=>{setIssues(d);ls.set("hr2_issues",d);};
+
+  const p={teams,members,cats,issues,upT,upM,upC,upI};
+  const tabs=[{id:"dashboard",label:"📊 대시보드"},{id:"issues",label:"📝 이슈 기록"},{id:"members",label:"👥 팀원 관리"},{id:"cats",label:"🏷️ 카테고리"}];
+
+  return (
+    <div style={{minHeight:"100vh",background:"#f8fafc"}}>
+      <header style={{background:"#fff",borderBottom:"1px solid #e2e8f0",position:"sticky",top:0,zIndex:20,boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>
+        <div style={{maxWidth:1100,margin:"0 auto",padding:"12px 16px",display:"flex",alignItems:"center",gap:24,flexWrap:"wrap"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+            <span style={{fontSize:20}}>🏷️</span>
+            <span style={{fontWeight:700,color:"#1e293b",fontSize:16}}>HR 이슈 트래커</span>
+          </div>
+          <nav style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+            {tabs.map(t=>(
+              <button key={t.id} onClick={()=>setTab(t.id)} style={{
+                padding:"6px 14px",borderRadius:8,fontSize:13,fontWeight:500,border:"none",cursor:"pointer",transition:"all .15s",
+                background:tab===t.id?"#2563eb":"transparent",color:tab===t.id?"#fff":"#475569"
+              }}>{t.label}</button>
+            ))}
+          </nav>
+        </div>
+      </header>
+      <main style={{maxWidth:1100,margin:"0 auto",padding:"24px 16px"}}>
+        {tab==="dashboard"&&<Dashboard {...p}/>}
+        {tab==="issues"&&<IssueMgr {...p}/>}
+        {tab==="members"&&<MemberMgr {...p}/>}
+        {tab==="cats"&&<CatMgr {...p}/>}
+      </main>
+    </div>
+  );
+}
+
+// ── DASHBOARD ─────────────────────────────────────────
+function Dashboard({teams,members,cats,issues}) {
+  const [days,setDays]=useState(14);
+  const [sel,setSel]=useState(null);
+  const dateRange=getDates(days);
+  const today=todayStr();
+  const thisMonth=today.slice(0,7);
+  const monthIss=issues.filter(i=>i.date.startsWith(thisMonth));
+  const membersWithIss=new Set(monthIss.map(i=>i.memberId)).size;
+  const getIss=(mId,d)=>issues.filter(i=>i.memberId===mId&&i.date===d);
+  const getCat=id=>cats.find(c=>c.id===id);
+  const getMember=id=>members.find(m=>m.id===id);
+  const getTeam=id=>teams.find(t=>t.id===id);
+
+  const stats=[
+    {label:"이번 달 이슈",val:monthIss.length,color:"#2563eb"},
+    {label:"이슈 팀원 수",val:membersWithIss,color:"#7c3aed"},
+    {label:"전체 팀원",val:members.length,color:"#059669"},
+    {label:"누적 이슈",val:issues.length,color:"#d97706"},
+  ];
+
+  const selected=sel?getIss(sel.memberId,sel.date):null;
+  const selMember=sel?getMember(sel.memberId):null;
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:20}}>
+      {/* Stats */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
+        {stats.map((s,i)=>(
+          <div key={i} style={{background:"#fff",borderRadius:12,border:"1px solid #e2e8f0",padding:16,boxShadow:"0 1px 2px rgba(0,0,0,.04)"}}>
+            <p style={{fontSize:12,color:"#94a3b8",margin:"0 0 4px"}}>{s.label}</p>
+            <p style={{fontSize:28,fontWeight:700,color:s.color,margin:0}}>{s.val}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Matrix */}
+      <div style={{background:"#fff",borderRadius:12,border:"1px solid #e2e8f0",padding:16,boxShadow:"0 1px 2px rgba(0,0,0,.04)"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+          <span style={{fontWeight:600,color:"#1e293b"}}>📅 날짜별 HR 이슈 현황판</span>
+          <select value={days} onChange={e=>setDays(+e.target.value)} style={{fontSize:13,border:"1px solid #e2e8f0",borderRadius:8,padding:"4px 8px",color:"#475569",background:"#fff"}}>
+            <option value={7}>최근 7일</option>
+            <option value={14}>최근 14일</option>
+            <option value={30}>최근 30일</option>
+          </select>
+        </div>
+        <div style={{overflowX:"auto"}}>
+          <table style={{fontSize:12,width:"100%",borderCollapse:"collapse",minWidth:500}}>
+            <thead>
+              <tr style={{borderBottom:"1px solid #e2e8f0"}}>
+                <th style={{textAlign:"left",padding:"6px 12px 6px 0",fontWeight:500,color:"#94a3b8",width:160,whiteSpace:"nowrap"}}>팀 · 팀원</th>
+                {dateRange.map(d=>(
+                  <th key={d} style={{textAlign:"center",padding:"4px 2px",fontWeight:500,color:d===today?"#2563eb":"#94a3b8",minWidth:28}}>
+                    <div>{fmtMD(d)}</div>
+                    {d===today&&<div style={{fontSize:8,color:"#93c5fd"}}>●</div>}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {teams.map(team=>{
+                const tm=members.filter(m=>m.teamId===team.id);
+                if(!tm.length) return null;
+                return [
+                  <tr key={"h"+team.id}>
+                    <td colSpan={dateRange.length+1} style={{paddingTop:12,paddingBottom:2}}>
+                      <span style={{fontSize:11,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.06em"}}>{team.name}</span>
+                    </td>
+                  </tr>,
+                  ...tm.map(m=>(
+                    <tr key={m.id} style={{borderBottom:"1px solid #f8fafc"}}>
+                      <td style={{padding:"6px 12px 6px 0",whiteSpace:"nowrap"}}>
+                        <span style={{fontWeight:500,color:"#1e293b",marginRight:4}}>{m.name}</span>
+                        <Badge type={m.type}/>
+                      </td>
+                      {dateRange.map(d=>{
+                        const di=getIss(m.id,d);
+                        return (
+                          <td key={d} style={{textAlign:"center",padding:"4px 2px",background:d===today?"#eff6ff":"transparent"}}>
+                            {di.length>0?(
+                              <button onClick={()=>setSel(s=>s?.date===d&&s?.memberId===m.id?null:{date:d,memberId:m.id})}
+                                style={{background:"none",border:"none",cursor:"pointer",padding:0,display:"flex",flexWrap:"wrap",gap:2,justifyContent:"center",margin:"0 auto",width:20,transition:"transform .1s"}}>
+                                {di.map(iss=>(
+                                  <div key={iss.id} style={{width:10,height:10,borderRadius:"50%",background:getCat(iss.categoryId)?.color||"#9ca3af"}} title={getCat(iss.categoryId)?.name}/>
+                                ))}
+                              </button>
+                            ):(
+                              <div style={{width:10,height:10,borderRadius:"50%",background:"#f1f5f9",margin:"0 auto"}}/>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))
+                ];
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {selected&&selMember&&(
+          <div style={{marginTop:12,borderTop:"1px solid #e2e8f0",paddingTop:12}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+              <span style={{fontSize:13,fontWeight:600,color:"#1e293b"}}>
+                {sel.date} · {selMember.name}
+                <span style={{marginLeft:6}}><Badge type={selMember.type}/></span>
+                <span style={{marginLeft:6,color:"#94a3b8",fontWeight:400,fontSize:12}}>{getTeam(selMember.teamId)?.name}</span>
+              </span>
+              <button onClick={()=>setSel(null)} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#cbd5e1",lineHeight:1}}>×</button>
+            </div>
+            {selected.map(iss=>{
+              const cat=getCat(iss.categoryId);
+              return (
+                <div key={iss.id} style={{display:"flex",alignItems:"flex-start",gap:8,marginBottom:6,fontSize:13}}>
+                  <span style={{padding:"2px 10px",borderRadius:9999,color:"#fff",fontSize:12,flexShrink:0,background:cat?.color||"#9ca3af"}}>{cat?.name}</span>
+                  {iss.memo&&<span style={{color:"#475569"}}>{iss.memo}</span>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div style={{marginTop:16,paddingTop:12,borderTop:"1px solid #e2e8f0",display:"flex",flexWrap:"wrap",gap:12}}>
+          {cats.map(c=>(
+            <div key={c.id} style={{display:"flex",alignItems:"center",gap:4,fontSize:11,color:"#64748b"}}>
+              <div style={{width:10,height:10,borderRadius:"50%",background:c.color}}/>
+              {c.name}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Recent */}
+      <div style={{background:"#fff",borderRadius:12,border:"1px solid #e2e8f0",padding:16,boxShadow:"0 1px 2px rgba(0,0,0,.04)"}}>
+        <p style={{fontWeight:600,color:"#1e293b",margin:"0 0 12px"}}>🕐 최근 이슈</p>
+        {issues.length===0?(
+          <p style={{color:"#94a3b8",textAlign:"center",padding:"24px 0",fontSize:13}}>기록된 이슈가 없습니다.</p>
+        ):(
+          <div>
+            {[...issues].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,10).map(iss=>{
+              const m=getMember(iss.memberId),cat=getCat(iss.categoryId),team=getTeam(m?.teamId);
+              return (
+                <div key={iss.id} style={{display:"flex",alignItems:"center",gap:12,padding:"8px 0",borderBottom:"1px solid #f8fafc",fontSize:13}}>
+                  <span style={{color:"#94a3b8",fontSize:11,width:48,flexShrink:0}}>{iss.date.slice(5)}</span>
+                  <span style={{color:"#94a3b8",fontSize:11,width:72,flexShrink:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{team?.name}</span>
+                  <span style={{fontWeight:500,color:"#1e293b",width:56,flexShrink:0}}>{m?.name}</span>
+                  <span style={{padding:"2px 8px",borderRadius:9999,color:"#fff",fontSize:11,flexShrink:0,background:cat?.color||"#9ca3af"}}>{cat?.name}</span>
+                  {iss.memo&&<span style={{color:"#64748b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontSize:12}}>{iss.memo}</span>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── ISSUE MANAGER ─────────────────────────────────────
+function IssueMgr({teams,members,cats,issues,upI}) {
+  const [showForm,setShowForm]=useState(false);
+  const [editing,setEditing]=useState(null);
+  const [form,setForm]=useState({teamId:"",memberId:"",categoryId:"",date:todayStr(),memo:""});
+  const [fTeam,setFTeam]=useState("");
+  const [fMember,setFMember]=useState("");
+  const [fCat,setFCat]=useState("");
+  const [fFrom,setFFrom]=useState("");
+  const [fTo,setFTo]=useState("");
+
+  const openAdd=()=>{setEditing(null);setForm({teamId:"",memberId:"",categoryId:"",date:todayStr(),memo:""});setShowForm(true);};
+  const startEdit=iss=>{
+    const m=members.find(x=>x.id===iss.memberId);
+    setEditing(iss.id);setForm({teamId:m?.teamId||"",memberId:iss.memberId,categoryId:iss.categoryId,date:iss.date,memo:iss.memo||""});setShowForm(true);
+  };
+  const save=()=>{
+    if(!form.memberId||!form.categoryId||!form.date)return;
+    const {teamId,...rest}=form;
+    if(editing){upI(issues.map(i=>i.id===editing?{...i,...rest}:i));}
+    else{upI([...issues,{id:uid(),...rest}]);}
+    setShowForm(false);setEditing(null);
+  };
+  const del=id=>{if(confirm("이슈를 삭제하시겠습니까?"))upI(issues.filter(i=>i.id!==id));};
+
+  const filtered=issues.filter(i=>{
+    const m=members.find(x=>x.id===i.memberId);
+    if(fTeam&&m?.teamId!==fTeam)return false;
+    if(fMember&&i.memberId!==fMember)return false;
+    if(fCat&&i.categoryId!==fCat)return false;
+    if(fFrom&&i.date<fFrom)return false;
+    if(fTo&&i.date>fTo)return false;
+    return true;
+  }).sort((a,b)=>b.date.localeCompare(a.date));
+
+  const exportCSV=()=>{
+    const rows=[["날짜","팀","이름","고용형태","카테고리","메모"],...filtered.map(i=>{
+      const m=members.find(x=>x.id===i.memberId),t=teams.find(x=>x.id===m?.teamId),c=cats.find(x=>x.id===i.categoryId);
+      return[i.date,t?.name||"",m?.name||"",m?.type||"",c?.name||"",i.memo||""];
+    })];
+    const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+    const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");a.href=url;a.download=`hr_issues_${todayStr()}.csv`;a.click();
+  };
+
+  const inp={fontSize:13,border:"1px solid #e2e8f0",borderRadius:8,padding:"8px 12px",width:"100%",background:"#fff",color:"#1e293b",outline:"none"};
+  const btn=(bg,fg)=>({padding:"6px 16px",borderRadius:8,border:"none",cursor:"pointer",fontSize:13,fontWeight:500,background:bg,color:fg});
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:16}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <span style={{fontSize:18,fontWeight:600,color:"#1e293b"}}>📝 HR 이슈 기록</span>
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={exportCSV} style={{...btn("#fff","#475569"),border:"1px solid #e2e8f0"}}>📥 CSV 내보내기</button>
+          <button onClick={openAdd} style={btn("#2563eb","#fff")}>+ 이슈 추가</button>
+        </div>
+      </div>
+
+      {showForm&&(
+        <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:12,padding:16}}>
+          <p style={{fontWeight:600,color:"#1e4ed8",fontSize:13,margin:"0 0 12px"}}>{editing?"이슈 수정":"새 이슈 기록"}</p>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <div>
+              <label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:4}}>팀 선택</label>
+              <select value={form.teamId} onChange={e=>setForm({...form,teamId:e.target.value,memberId:""})} style={inp}>
+                <option value="">전체 팀</option>
+                {teams.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:4}}>팀원 *</label>
+              <select value={form.memberId} onChange={e=>setForm({...form,memberId:e.target.value})} style={inp}>
+                <option value="">선택</option>
+                {members.filter(m=>!form.teamId||m.teamId===form.teamId).map(m=><option key={m.id} value={m.id}>{m.name} ({m.type})</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:4}}>카테고리 *</label>
+              <select value={form.categoryId} onChange={e=>setForm({...form,categoryId:e.target.value})} style={inp}>
+                <option value="">선택</option>
+                {cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:4}}>날짜 *</label>
+              <input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} style={inp}/>
+            </div>
+            <div style={{gridColumn:"1/-1"}}>
+              <label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:4}}>메모</label>
+              <textarea value={form.memo} onChange={e=>setForm({...form,memo:e.target.value})} rows={2}
+                placeholder="이슈 내용을 기록하세요..." style={{...inp,resize:"none"}}/>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8,marginTop:12}}>
+            <button onClick={save} style={btn("#2563eb","#fff")}>{editing?"수정 완료":"저장"}</button>
+            <button onClick={()=>{setShowForm(false);setEditing(null);}} style={{...btn("#fff","#475569"),border:"1px solid #e2e8f0"}}>취소</button>
+          </div>
+        </div>
+      )}
+
+      {/* Filters */}
+      <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:12,padding:"10px 14px",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+        <span style={{fontSize:11,color:"#94a3b8",fontWeight:600}}>필터</span>
+        {[
+          [fTeam,setFTeam,[{value:"",label:"전체 팀"},...teams.map(t=>({value:t.id,label:t.name}))],()=>{}],
+        ].map(([val,set,opts],i)=>(
+          <select key={i} value={val} onChange={e=>{set(e.target.value);if(i===0)setFMember("");}} style={{fontSize:12,border:"1px solid #e2e8f0",borderRadius:8,padding:"4px 8px",color:"#475569",background:"#fff"}}>
+            {opts.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        ))}
+        <select value={fMember} onChange={e=>setFMember(e.target.value)} style={{fontSize:12,border:"1px solid #e2e8f0",borderRadius:8,padding:"4px 8px",color:"#475569",background:"#fff"}}>
+          <option value="">전체 팀원</option>
+          {members.filter(m=>!fTeam||m.teamId===fTeam).map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
+        </select>
+        <select value={fCat} onChange={e=>setFCat(e.target.value)} style={{fontSize:12,border:"1px solid #e2e8f0",borderRadius:8,padding:"4px 8px",color:"#475569",background:"#fff"}}>
+          <option value="">전체 카테고리</option>
+          {cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <input type="date" value={fFrom} onChange={e=>setFFrom(e.target.value)} style={{fontSize:12,border:"1px solid #e2e8f0",borderRadius:8,padding:"4px 8px",color:"#475569",background:"#fff"}}/>
+        <span style={{color:"#cbd5e1",fontSize:11}}>~</span>
+        <input type="date" value={fTo} onChange={e=>setFTo(e.target.value)} style={{fontSize:12,border:"1px solid #e2e8f0",borderRadius:8,padding:"4px 8px",color:"#475569",background:"#fff"}}/>
+        {(fTeam||fMember||fCat||fFrom||fTo)&&(
+          <button onClick={()=>{setFTeam("");setFMember("");setFCat("");setFFrom("");setFTo("");}}
+            style={{fontSize:12,color:"#2563eb",background:"none",border:"none",cursor:"pointer",padding:0}}>초기화</button>
+        )}
+        <span style={{fontSize:11,color:"#94a3b8",marginLeft:4}}>{filtered.length}건</span>
+      </div>
+
+      {/* Table */}
+      <div style={{background:"#fff",borderRadius:12,border:"1px solid #e2e8f0",boxShadow:"0 1px 2px rgba(0,0,0,.04)",overflow:"hidden"}}>
+        {filtered.length===0?(
+          <p style={{textAlign:"center",color:"#94a3b8",padding:"48px 0",fontSize:13}}>기록된 이슈가 없습니다.</p>
+        ):(
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+              <thead style={{background:"#f8fafc",borderBottom:"1px solid #e2e8f0"}}>
+                <tr>
+                  {["날짜","팀","팀원","카테고리","메모",""].map((h,i)=>(
+                    <th key={i} style={{textAlign:"left",padding:"10px 16px",fontWeight:500,color:"#64748b",fontSize:11}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((iss,idx)=>{
+                  const m=members.find(x=>x.id===iss.memberId),t=teams.find(x=>x.id===m?.teamId),c=cats.find(x=>x.id===iss.categoryId);
+                  return (
+                    <tr key={iss.id} style={{borderBottom:"1px solid #f8fafc",background:idx%2===0?"#fff":"#fafafa"}}>
+                      <td style={{padding:"10px 16px",color:"#64748b",whiteSpace:"nowrap",fontSize:12}}>{iss.date}</td>
+                      <td style={{padding:"10px 16px",color:"#94a3b8",fontSize:12}}>{t?.name}</td>
+                      <td style={{padding:"10px 16px",whiteSpace:"nowrap"}}>
+                        <span style={{fontWeight:500,color:"#1e293b",marginRight:4}}>{m?.name}</span>
+                        {m&&<Badge type={m.type}/>}
+                      </td>
+                      <td style={{padding:"10px 16px"}}>
+                        <span style={{padding:"2px 10px",borderRadius:9999,color:"#fff",fontSize:11,background:c?.color||"#9ca3af"}}>{c?.name}</span>
+                      </td>
+                      <td style={{padding:"10px 16px",color:"#64748b",fontSize:12,maxWidth:240,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{iss.memo}</td>
+                      <td style={{padding:"10px 16px",whiteSpace:"nowrap"}}>
+                        <button onClick={()=>startEdit(iss)} style={{fontSize:12,color:"#2563eb",background:"none",border:"none",cursor:"pointer",marginRight:8}}>수정</button>
+                        <button onClick={()=>del(iss.id)} style={{fontSize:12,color:"#ef4444",background:"none",border:"none",cursor:"pointer"}}>삭제</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── MEMBER MANAGER ────────────────────────────────────
+function MemberMgr({teams,members,upT,upM}) {
+  const [editTeamId,setEditTeamId]=useState(null);
+  const [editTeamName,setEditTeamName]=useState("");
+  const [addingTeam,setAddingTeam]=useState(false);
+  const [newTeamName,setNewTeamName]=useState("");
+  const [addMemberTeam,setAddMemberTeam]=useState(null);
+  const [editMemberId,setEditMemberId]=useState(null);
+  const [mForm,setMForm]=useState({name:"",type:"정규직"});
+
+  const addTeam=()=>{if(!newTeamName.trim())return;upT([...teams,{id:uid(),name:newTeamName.trim()}]);setNewTeamName("");setAddingTeam(false);};
+  const saveTeamName=id=>{upT(teams.map(t=>t.id===id?{...t,name:editTeamName}:t));setEditTeamId(null);};
+  const delTeam=id=>{if(!confirm("팀을 삭제하면 해당 팀원도 삭제됩니다. 계속하시겠습니까?"))return;upT(teams.filter(t=>t.id!==id));upM(members.filter(m=>m.teamId!==id));};
+  const saveMember=()=>{
+    if(!mForm.name.trim())return;
+    if(editMemberId){upM(members.map(m=>m.id===editMemberId?{...m,...mForm}:m));setEditMemberId(null);}
+    else if(addMemberTeam){upM([...members,{id:uid(),teamId:addMemberTeam,name:mForm.name.trim(),type:mForm.type}]);setAddMemberTeam(null);}
+    setMForm({name:"",type:"정규직"});
+  };
+  const delMember=id=>{if(confirm("팀원을 삭제하시겠습니까?"))upM(members.filter(m=>m.id!==id));};
+
+  const inp={fontSize:13,border:"1px solid #e2e8f0",borderRadius:8,padding:"6px 10px",background:"#fff",color:"#1e293b",outline:"none"};
+  const btn=(bg,fg,border)=>({padding:"6px 14px",borderRadius:8,border:border||"none",cursor:"pointer",fontSize:13,fontWeight:500,background:bg,color:fg});
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:16}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <span style={{fontSize:18,fontWeight:600,color:"#1e293b"}}>👥 팀원 관리</span>
+        <button onClick={()=>{setAddingTeam(true);setNewTeamName("");}} style={btn("#2563eb","#fff")}>+ 팀 추가</button>
+      </div>
+
+      {addingTeam&&(
+        <div style={{display:"flex",gap:8,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:12,padding:12}}>
+          <input autoFocus value={newTeamName} onChange={e=>setNewTeamName(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&addTeam()} placeholder="새 팀 이름" style={{...inp,flex:1}}/>
+          <button onClick={addTeam} style={btn("#2563eb","#fff")}>추가</button>
+          <button onClick={()=>setAddingTeam(false)} style={btn("#fff","#475569","1px solid #e2e8f0")}>취소</button>
+        </div>
+      )}
+
+      {teams.map(team=>{
+        const tm=members.filter(m=>m.teamId===team.id);
+        return (
+          <div key={team.id} style={{background:"#fff",borderRadius:12,border:"1px solid #e2e8f0",boxShadow:"0 1px 2px rgba(0,0,0,.04)",overflow:"hidden"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#f8fafc",borderBottom:"1px solid #e2e8f0"}}>
+              {editTeamId===team.id?(
+                <div style={{display:"flex",gap:8,flex:1}}>
+                  <input autoFocus value={editTeamName} onChange={e=>setEditTeamName(e.target.value)}
+                    onKeyDown={e=>e.key==="Enter"&&saveTeamName(team.id)}
+                    onBlur={()=>saveTeamName(team.id)} style={{...inp,maxWidth:240}}/>
+                  <span style={{fontSize:11,color:"#94a3b8",alignSelf:"center"}}>Enter로 저장</span>
+                </div>
+              ):(
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontWeight:600,color:"#1e293b"}}>{team.name}</span>
+                  <span style={{fontSize:12,color:"#94a3b8"}}>({tm.length}명)</span>
+                </div>
+              )}
+              <div style={{display:"flex",gap:12}}>
+                <button onClick={()=>{setEditTeamId(team.id);setEditTeamName(team.name);}} style={{fontSize:12,color:"#2563eb",background:"none",border:"none",cursor:"pointer"}}>팀명 수정</button>
+                <button onClick={()=>{setAddMemberTeam(team.id);setMForm({name:"",type:"정규직"});setEditMemberId(null);}} style={{fontSize:12,color:"#059669",background:"none",border:"none",cursor:"pointer"}}>+ 팀원 추가</button>
+                <button onClick={()=>delTeam(team.id)} style={{fontSize:12,color:"#ef4444",background:"none",border:"none",cursor:"pointer"}}>팀 삭제</button>
+              </div>
+            </div>
+
+            {addMemberTeam===team.id&&(
+              <div style={{display:"flex",gap:8,padding:"8px 16px",background:"#f0fdf4",borderBottom:"1px solid #e2e8f0",alignItems:"center"}}>
+                <input autoFocus value={mForm.name} onChange={e=>setMForm({...mForm,name:e.target.value})}
+                  onKeyDown={e=>e.key==="Enter"&&saveMember()} placeholder="이름" style={{...inp,width:120}}/>
+                <select value={mForm.type} onChange={e=>setMForm({...mForm,type:e.target.value})} style={inp}>
+                  {EMP_TYPES.map(t=><option key={t}>{t}</option>)}
+                </select>
+                <button onClick={saveMember} style={btn("#059669","#fff")}>추가</button>
+                <button onClick={()=>setAddMemberTeam(null)} style={btn("#fff","#475569","1px solid #e2e8f0")}>취소</button>
+              </div>
+            )}
+
+            {tm.length===0?(
+              <p style={{textAlign:"center",color:"#94a3b8",padding:"16px 0",fontSize:13}}>팀원이 없습니다.</p>
+            ):(
+              tm.map((m,idx)=>(
+                <div key={m.id} style={{display:"flex",alignItems:"center",padding:"10px 16px",borderBottom:idx<tm.length-1?"1px solid #f8fafc":"none"}}>
+                  {editMemberId===m.id?(
+                    <div style={{display:"flex",gap:8,flex:1,alignItems:"center"}}>
+                      <input autoFocus value={mForm.name} onChange={e=>setMForm({...mForm,name:e.target.value})}
+                        onKeyDown={e=>e.key==="Enter"&&saveMember()} style={{...inp,width:120}}/>
+                      <select value={mForm.type} onChange={e=>setMForm({...mForm,type:e.target.value})} style={inp}>
+                        {EMP_TYPES.map(t=><option key={t}>{t}</option>)}
+                      </select>
+                      <button onClick={saveMember} style={{fontSize:12,color:"#2563eb",fontWeight:600,background:"none",border:"none",cursor:"pointer"}}>저장</button>
+                      <button onClick={()=>setEditMemberId(null)} style={{fontSize:12,color:"#94a3b8",background:"none",border:"none",cursor:"pointer"}}>취소</button>
+                    </div>
+                  ):(
+                    <div style={{display:"flex",alignItems:"center",gap:6,flex:1}}>
+                      <span style={{fontWeight:500,color:"#1e293b"}}>{m.name}</span>
+                      <Badge type={m.type}/>
+                    </div>
+                  )}
+                  {editMemberId!==m.id&&(
+                    <div style={{display:"flex",gap:12}}>
+                      <button onClick={()=>{setEditMemberId(m.id);setMForm({name:m.name,type:m.type});setAddMemberTeam(null);}}
+                        style={{fontSize:12,color:"#2563eb",background:"none",border:"none",cursor:"pointer"}}>수정</button>
+                      <button onClick={()=>delMember(m.id)} style={{fontSize:12,color:"#ef4444",background:"none",border:"none",cursor:"pointer"}}>삭제</button>
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── CATEGORY MANAGER ──────────────────────────────────
+function CatMgr({cats,upC}) {
+  const [editing,setEditing]=useState(null);
+  const [adding,setAdding]=useState(false);
+  const [form,setForm]=useState({name:"",color:"#3b82f6"});
+
+  const openAdd=()=>{setAdding(true);setEditing(null);setForm({name:"",color:"#3b82f6"});};
+  const startEdit=c=>{setEditing(c.id);setForm({name:c.name,color:c.color});setAdding(false);};
+  const save=()=>{
+    if(!form.name.trim())return;
+    if(editing){upC(cats.map(c=>c.id===editing?{...c,...form}:c));setEditing(null);}
+    else{upC([...cats,{id:uid(),...form}]);setAdding(false);}
+    setForm({name:"",color:"#3b82f6"});
+  };
+  const del=id=>{if(confirm("카테고리를 삭제하시겠습니까?"))upC(cats.filter(c=>c.id!==id));};
+  const inp={fontSize:13,border:"1px solid #e2e8f0",borderRadius:8,padding:"8px 12px",width:"100%",background:"#fff",color:"#1e293b",outline:"none"};
+
+  return (
+    <div style={{maxWidth:480,display:"flex",flexDirection:"column",gap:16}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <span style={{fontSize:18,fontWeight:600,color:"#1e293b"}}>🏷️ 카테고리 관리</span>
+        <button onClick={openAdd} style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",fontSize:13,fontWeight:500,background:"#2563eb",color:"#fff"}}>+ 카테고리 추가</button>
+      </div>
+
+      {(adding||editing)&&(
+        <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:12,padding:16,display:"flex",flexDirection:"column",gap:12}}>
+          <p style={{fontWeight:600,color:"#1e4ed8",fontSize:13,margin:0}}>{editing?"카테고리 수정":"새 카테고리"}</p>
+          <div>
+            <label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:4}}>이름</label>
+            <input autoFocus value={form.name} onChange={e=>setForm({...form,name:e.target.value})}
+              onKeyDown={e=>e.key==="Enter"&&save()} placeholder="카테고리 이름" style={inp}/>
+          </div>
+          <div>
+            <label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:8}}>색상</label>
+            <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+              {PALETTE.map(c=>(
+                <button key={c} onClick={()=>setForm({...form,color:c})} style={{
+                  width:28,height:28,borderRadius:"50%",border:form.color===c?"3px solid #475569":"3px solid transparent",
+                  cursor:"pointer",background:c,transform:form.color===c?"scale(1.15)":"scale(1)",transition:"all .15s"
+                }}/>
+              ))}
+            </div>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:11,color:"#94a3b8"}}>미리보기</span>
+            <span style={{padding:"4px 12px",borderRadius:9999,color:"#fff",fontSize:13,background:form.color}}>{form.name||"카테고리명"}</span>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={save} style={{padding:"6px 16px",borderRadius:8,border:"none",cursor:"pointer",fontSize:13,fontWeight:500,background:"#2563eb",color:"#fff"}}>저장</button>
+            <button onClick={()=>{setAdding(false);setEditing(null);}} style={{padding:"6px 16px",borderRadius:8,border:"1px solid #e2e8f0",cursor:"pointer",fontSize:13,background:"#fff",color:"#475569"}}>취소</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{background:"#fff",borderRadius:12,border:"1px solid #e2e8f0",boxShadow:"0 1px 2px rgba(0,0,0,.04)",overflow:"hidden"}}>
+        {cats.map((cat,i)=>(
+          <div key={cat.id} style={{display:"flex",alignItems:"center",padding:"12px 16px",borderBottom:i<cats.length-1?"1px solid #f8fafc":"none"}}>
+            <div style={{width:14,height:14,borderRadius:"50%",background:cat.color,marginRight:12,flexShrink:0}}/>
+            <span style={{flex:1,color:"#1e293b",fontWeight:500}}>{cat.name}</span>
+            <div style={{display:"flex",gap:12}}>
+              <button onClick={()=>startEdit(cat)} style={{fontSize:12,color:"#2563eb",background:"none",border:"none",cursor:"pointer"}}>수정</button>
+              <button onClick={()=>del(cat.id)} style={{fontSize:12,color:"#ef4444",background:"none",border:"none",cursor:"pointer"}}>삭제</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
