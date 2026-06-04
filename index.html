@@ -59,11 +59,18 @@ const cache={
 };
 
 /* ── GAS API ────────────────────────────────────────── */
-async function gasLoad(url){
-  const r=await fetch(url+"?action=getData",{redirect:"follow"});
-  const j=await r.json();
-  if(!j.ok)throw new Error(j.error||"API 오류");
-  return j.data;
+async function gasLoad(url, retry=2){
+  for(let i=0;i<retry;i++){
+    try{
+      const r=await fetch(url+"?action=getData",{redirect:"follow"});
+      const j=await r.json();
+      if(!j.ok)throw new Error(j.error||"API 오류");
+      return j.data;
+    }catch(e){
+      if(i===retry-1) throw e;          // 마지막 시도까지 실패하면 에러
+      await new Promise(r=>setTimeout(r,3000)); // 3초 후 재시도
+    }
+  }
 }
 function gasSave(url,key,value){
   var fd=new FormData();
@@ -180,8 +187,9 @@ function App(){
   const loadData=useCallback(async(url,quiet=false)=>{
     if(!url)return;
     if(!quiet)setSync("loading");
+    else setSync("loading"); // 자동갱신도 표시
     try{
-      const d=await gasLoad(url);
+      const d=await gasLoad(url);       // 내부적으로 최대 2회 재시도
       if(d.teams)setTeams(d.teams);     else if(!cache.get("teams"))   setTeams(D_TEAMS);
       if(d.members)setMembers(d.members); else if(!cache.get("members")) setMembers(D_MEMBERS);
       if(d.cats)setCats(d.cats);        else if(!cache.get("cats"))    setCats(D_CATS);
@@ -190,7 +198,8 @@ function App(){
       if(!quiet)showToast("데이터를 불러왔습니다","ok");
     }catch{
       setSync("error");
-      showToast("API 연결 실패 — 캐시 데이터를 표시합니다","err");
+      // 오류 3초 후 자동으로 idle로 복귀 (빨간 표시 최소화)
+      setTimeout(()=>setSync(s=>s==="error"?"idle":s), 3000);
       const t=cache.get("teams"),m=cache.get("members"),c=cache.get("cats"),i=cache.get("issues");
       if(t)setTeams(t);if(m)setMembers(m);if(c)setCats(c);if(i)setIssues(i);
     }finally{setLoading(false);}
@@ -207,7 +216,7 @@ function App(){
 
   useEffect(()=>{
     if(!apiUrl)return;
-    const id=setInterval(()=>loadData(apiUrl,true),60000);
+    const id=setInterval(()=>loadData(apiUrl,true),180000); // 3분마다 자동갱신
     return()=>clearInterval(id);
   },[apiUrl,loadData]);
 
