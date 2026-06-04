@@ -10,8 +10,7 @@
   <style>
     *{box-sizing:border-box;}
     body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans KR',sans-serif;background:#f8fafc;}
-    input,select,textarea{font-family:inherit;}
-    button{font-family:inherit;}
+    input,select,textarea,button{font-family:inherit;}
   </style>
 </head>
 <body>
@@ -20,9 +19,12 @@
 const {useState,useEffect,useCallback} = React;
 
 /* ── 상수 ──────────────────────────────────────────── */
-const EMP_TYPES = ["정규직","계약직","인턴"];
-const PALETTE   = ["#3b82f6","#ef4444","#10b981","#f59e0b","#8b5cf6","#dc2626","#06b6d4","#ec4899","#f97316","#84cc16","#14b8a6","#6b7280"];
-const API_KEY   = "hr_gas_url";
+const EMP_TYPES    = ["정규직","계약직","인턴"];
+const PALETTE      = ["#3b82f6","#ef4444","#10b981","#f59e0b","#8b5cf6","#dc2626","#06b6d4","#ec4899","#f97316","#84cc16","#14b8a6","#6b7280"];
+const API_KEY      = "hr_gas_url";
+const PASS_KEY     = "hr_pass_hash";
+const AUTH_KEY     = "hr_authed";
+const DEFAULT_PASS = "vb2026hr";   // ← 기본 비밀번호 (변경 가능)
 
 const D_TEAMS   = [{id:"t1",name:"경영지원팀"},{id:"t2",name:"마케팅팀"},{id:"t3",name:"MD팀"},{id:"t4",name:"운영팀"},{id:"t5",name:"고객서비스팀"}];
 const D_MEMBERS = [
@@ -38,31 +40,36 @@ const D_CATS = [
   {id:"c7",name:"기타",color:"#6b7280"},
 ];
 
-/* ── 유틸 ──────────────────────────────────────────── */
-const uid     = () => Date.now().toString(36)+Math.random().toString(36).slice(2,5);
-const today   = () => new Date().toISOString().slice(0,10);
-const fmtMD   = d => { const[,m,day]=d.split("-"); return `${m}/${day}`; };
-const getDates= n => { const a=[]; for(let i=n-1;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);a.push(d.toISOString().slice(0,10));} return a; };
+/* ── SHA-256 ────────────────────────────────────────── */
+async function sha256(str){
+  const buf=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
+}
 
-/* ── 로컬캐시 (오프라인 폴백용) ─────────────────────── */
-const cache = {
-  get: k => { try{const v=localStorage.getItem("hrc_"+k);return v?JSON.parse(v):null;}catch{return null;} },
-  set: (k,v)=> { try{localStorage.setItem("hrc_"+k,JSON.stringify(v));}catch{} },
+/* ── 유틸 ──────────────────────────────────────────── */
+const uid     = ()=>Date.now().toString(36)+Math.random().toString(36).slice(2,5);
+const today   = ()=>new Date().toISOString().slice(0,10);
+const fmtMD   = d=>{const[,m,day]=d.split("-");return`${m}/${day}`;};
+const getDates= n=>{const a=[];for(let i=n-1;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);a.push(d.toISOString().slice(0,10));}return a;};
+
+/* ── 로컬 캐시 ─────────────────────────────────────── */
+const cache={
+  get:k=>{try{const v=localStorage.getItem("hrc_"+k);return v?JSON.parse(v):null;}catch{return null;}},
+  set:(k,v)=>{try{localStorage.setItem("hrc_"+k,JSON.stringify(v));}catch{}},
 };
 
 /* ── GAS API ────────────────────────────────────────── */
 async function gasLoad(url){
-  const r = await fetch(url+"?action=getData",{redirect:"follow"});
-  const j = await r.json();
-  if(!j.ok) throw new Error(j.error||"API 오류");
+  const r=await fetch(url+"?action=getData",{redirect:"follow"});
+  const j=await r.json();
+  if(!j.ok)throw new Error(j.error||"API 오류");
   return j.data;
 }
 function gasSave(url,key,value){
-  // FormData + no-cors: GAS의 e.parameter 로 수신되는 가장 안정적인 방식
-  var fd = new FormData();
-  fd.append("key", key);
-  fd.append("value", JSON.stringify(value));
-  fetch(url, {method:"POST", mode:"no-cors", body:fd});
+  var fd=new FormData();
+  fd.append("key",key);
+  fd.append("value",JSON.stringify(value));
+  fetch(url,{method:"POST",mode:"no-cors",body:fd});
 }
 
 /* ── Badge ──────────────────────────────────────────── */
@@ -72,9 +79,57 @@ function Badge({type}){
 }
 
 /* ══════════════════════════════════════════════════════
+   LOGIN SCREEN
+══════════════════════════════════════════════════════ */
+function LoginScreen({onLogin}){
+  const [pw,setPw]       = useState("");
+  const [err,setErr]     = useState(false);
+  const [loading,setLd]  = useState(false);
+
+  const login=async()=>{
+    if(!pw.trim())return;
+    setLd(true);setErr(false);
+    const h=await sha256(pw);
+    if(h===localStorage.getItem(PASS_KEY)){
+      sessionStorage.setItem(AUTH_KEY,"1");
+      onLogin();
+    }else{
+      setErr(true);setLd(false);
+    }
+  };
+
+  return(
+    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#eff6ff 0%,#f8fafc 100%)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div style={{background:"#fff",borderRadius:20,padding:40,maxWidth:360,width:"100%",boxShadow:"0 8px 40px rgba(37,99,235,.12)"}}>
+        <div style={{textAlign:"center",marginBottom:28}}>
+          <div style={{fontSize:44,marginBottom:10}}>🏷️</div>
+          <h1 style={{margin:"0 0 4px",fontSize:22,fontWeight:700,color:"#1e293b"}}>HR 이슈 트래커</h1>
+          <p style={{margin:0,fontSize:13,color:"#94a3b8"}}>관리자 전용 페이지입니다</p>
+        </div>
+        <label style={{fontSize:12,color:"#64748b",fontWeight:500,display:"block",marginBottom:6}}>비밀번호</label>
+        <input type="password" value={pw} onChange={e=>{setPw(e.target.value);setErr(false);}}
+          onKeyDown={e=>e.key==="Enter"&&login()} placeholder="비밀번호를 입력하세요" autoFocus
+          style={{width:"100%",border:`1.5px solid ${err?"#ef4444":"#e2e8f0"}`,borderRadius:10,padding:"11px 14px",fontSize:14,outline:"none",transition:"border .15s",marginBottom:err?6:14}}/>
+        {err&&(
+          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:12,padding:"8px 12px",background:"#fef2f2",borderRadius:8,border:"1px solid #fecaca"}}>
+            <span style={{fontSize:14}}>❌</span>
+            <span style={{fontSize:12,color:"#dc2626",fontWeight:500}}>비밀번호가 올바르지 않습니다.</span>
+          </div>
+        )}
+        <button onClick={login} disabled={loading}
+          style={{width:"100%",padding:"12px 0",background:loading?"#93c5fd":"#2563eb",color:"#fff",border:"none",borderRadius:10,fontSize:14,fontWeight:600,cursor:loading?"not-allowed":"pointer",transition:"background .15s"}}>
+          {loading?"확인 중…":"로그인"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
    APP
 ══════════════════════════════════════════════════════ */
 function App(){
+  const [authed,setAuthed]   = useState(!!sessionStorage.getItem(AUTH_KEY));
   const [apiUrl,setApiUrl]   = useState(()=>localStorage.getItem(API_KEY)||"");
   const [setupInput,setSI]   = useState("");
   const [showSetup,setSetup] = useState(!localStorage.getItem(API_KEY));
@@ -84,76 +139,104 @@ function App(){
   const [cats,setCats]       = useState(D_CATS);
   const [issues,setIssues]   = useState([]);
   const [loading,setLoading] = useState(true);
-  const [sync,setSync]       = useState("idle"); // idle|loading|saving|saved|error
+  const [sync,setSync]       = useState("idle");
   const [lastSync,setLS]     = useState(null);
   const [toast,setToast]     = useState(null);
+  // 비밀번호 변경
+  const [curPw,setCurPw]     = useState("");
+  const [newPw1,setNP1]      = useState("");
+  const [newPw2,setNP2]      = useState("");
+  const [pwMsg,setPwMsg]     = useState(null);
+
+  /* 초기 비밀번호 해시 설정 */
+  useEffect(()=>{
+    if(!localStorage.getItem(PASS_KEY)){
+      sha256(DEFAULT_PASS).then(h=>localStorage.setItem(PASS_KEY,h));
+    }
+  },[]);
+
+  /* 인증 안 됐으면 로그인 화면 */
+  if(!authed) return <LoginScreen onLogin={()=>setAuthed(true)}/>;
 
   const showToast=(msg,type="info")=>{setToast({msg,type});setTimeout(()=>setToast(null),3000);};
 
+  const logout=()=>{sessionStorage.removeItem(AUTH_KEY);setAuthed(false);};
+
+  /* 비밀번호 변경 */
+  const changePass=async()=>{
+    setPwMsg(null);
+    if(!curPw||!newPw1||!newPw2){setPwMsg({t:"err",m:"모든 항목을 입력해주세요."});return;}
+    if(newPw1!==newPw2){setPwMsg({t:"err",m:"새 비밀번호가 일치하지 않습니다."});return;}
+    if(newPw1.length<4){setPwMsg({t:"err",m:"비밀번호는 4자 이상이어야 합니다."});return;}
+    const curH=await sha256(curPw);
+    if(curH!==localStorage.getItem(PASS_KEY)){setPwMsg({t:"err",m:"현재 비밀번호가 올바르지 않습니다."});return;}
+    const newH=await sha256(newPw1);
+    localStorage.setItem(PASS_KEY,newH);
+    setCurPw("");setNP1("");setNP2("");
+    setPwMsg({t:"ok",m:"✅ 비밀번호가 변경되었습니다."});
+  };
+
   /* 데이터 로드 */
-  const loadData = useCallback(async(url,quiet=false)=>{
+  const loadData=useCallback(async(url,quiet=false)=>{
     if(!url)return;
     if(!quiet)setSync("loading");
     try{
       const d=await gasLoad(url);
-      if(d.teams)   setTeams(d.teams);   else if(!cache.get("teams"))   setTeams(D_TEAMS);
-      if(d.members) setMembers(d.members); else if(!cache.get("members")) setMembers(D_MEMBERS);
-      if(d.cats)    setCats(d.cats);      else if(!cache.get("cats"))    setCats(D_CATS);
-      if(d.issues)  setIssues(d.issues);  else setIssues([]);
-      setSync("saved"); setLS(new Date());
+      if(d.teams)setTeams(d.teams);     else if(!cache.get("teams"))   setTeams(D_TEAMS);
+      if(d.members)setMembers(d.members); else if(!cache.get("members")) setMembers(D_MEMBERS);
+      if(d.cats)setCats(d.cats);        else if(!cache.get("cats"))    setCats(D_CATS);
+      if(d.issues)setIssues(d.issues);  else setIssues([]);
+      setSync("saved");setLS(new Date());
       if(!quiet)showToast("데이터를 불러왔습니다","ok");
-    }catch(e){
+    }catch{
       setSync("error");
       showToast("API 연결 실패 — 캐시 데이터를 표시합니다","err");
       const t=cache.get("teams"),m=cache.get("members"),c=cache.get("cats"),i=cache.get("issues");
-      if(t)setTeams(t); if(m)setMembers(m); if(c)setCats(c); if(i)setIssues(i);
-    }finally{ setLoading(false); }
+      if(t)setTeams(t);if(m)setMembers(m);if(c)setCats(c);if(i)setIssues(i);
+    }finally{setLoading(false);}
   },[]);
 
-  /* 초기 로드 */
   useEffect(()=>{
-    if(apiUrl){ loadData(apiUrl); }
+    if(apiUrl){loadData(apiUrl);}
     else{
       const t=cache.get("teams"),m=cache.get("members"),c=cache.get("cats"),i=cache.get("issues");
-      if(t)setTeams(t); if(m)setMembers(m); if(c)setCats(c); if(i)setIssues(i);
+      if(t)setTeams(t);if(m)setMembers(m);if(c)setCats(c);if(i)setIssues(i);
       setLoading(false);
     }
   },[apiUrl]);
 
-  /* 자동 갱신 1분 */
   useEffect(()=>{
     if(!apiUrl)return;
     const id=setInterval(()=>loadData(apiUrl,true),60000);
     return()=>clearInterval(id);
   },[apiUrl,loadData]);
 
-  /* 저장 */
   const sv=(key,data)=>{
     cache.set(key,data);
     if(!apiUrl)return;
     setSync("saving");
-    gasSave(apiUrl,key,data); // fire-and-forget (no-cors는 응답을 읽지 않음)
+    gasSave(apiUrl,key,data);
     setTimeout(()=>{setSync("saved");setLS(new Date());},800);
   };
-  const upT=d=>{setTeams(d);   sv("teams",d);};
-  const upM=d=>{setMembers(d); sv("members",d);};
-  const upC=d=>{setCats(d);    sv("cats",d);};
-  const upI=d=>{setIssues(d);  sv("issues",d);};
+  const upT=d=>{setTeams(d);sv("teams",d);};
+  const upM=d=>{setMembers(d);sv("members",d);};
+  const upC=d=>{setCats(d);sv("cats",d);};
+  const upI=d=>{setIssues(d);sv("issues",d);};
 
-  /* 설정 저장 */
   const handleSetup=()=>{
     const u=setupInput.trim();
     if(!u.startsWith("https://script.google.com")){showToast("올바른 GAS URL을 입력해주세요","err");return;}
-    localStorage.setItem(API_KEY,u); setApiUrl(u); setSetup(false); loadData(u);
+    localStorage.setItem(API_KEY,u);setApiUrl(u);setSetup(false);loadData(u);
   };
-  const resetUrl=()=>{localStorage.removeItem(API_KEY);setApiUrl("");setSetup(true);setSI("");};
 
   const syncC={idle:"#94a3b8",loading:"#3b82f6",saving:"#f59e0b",saved:"#10b981",error:"#ef4444"};
   const syncL={idle:"",loading:"불러오는 중…",saving:"저장 중…",saved:"✓ 저장됨",error:"⚠ 오류"};
   const tabs=[{id:"dashboard",l:"📊 대시보드"},{id:"issues",l:"📝 이슈 기록"},{id:"members",l:"👥 팀원 관리"},{id:"cats",l:"🏷️ 카테고리"}];
   const p={teams,members,cats,issues,upT,upM,upC,upI};
 
-  if(loading) return(
+  const inp2={fontSize:13,border:"1px solid #e2e8f0",borderRadius:8,padding:"8px 12px",width:"100%",background:"#fff",color:"#1e293b",outline:"none"};
+
+  if(loading)return(
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:"100vh",gap:12,color:"#94a3b8"}}>
       <div style={{fontSize:32}}>🏷️</div>
       <p style={{fontSize:14,margin:0}}>데이터를 불러오는 중…</p>
@@ -165,25 +248,38 @@ function App(){
 
       {/* ── 설정 모달 ── */}
       {showSetup&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.55)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
-          <div style={{background:"#fff",borderRadius:16,padding:32,maxWidth:460,width:"100%",boxShadow:"0 24px 64px rgba(0,0,0,.25)"}}>
-            <div style={{fontSize:36,textAlign:"center",marginBottom:8}}>🔗</div>
-            <h2 style={{margin:"0 0 6px",fontSize:18,fontWeight:700,color:"#1e293b",textAlign:"center"}}>Google Sheets 연결</h2>
-            <p style={{margin:"0 0 20px",fontSize:13,color:"#64748b",textAlign:"center",lineHeight:1.7}}>
-              Apps Script 배포 후 받은 <b>웹 앱 URL</b>을 붙여넣으세요.<br/>
-              팀원 전원이 같은 데이터를 실시간 공유합니다.
-            </p>
+        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.55)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:16,overflowY:"auto"}}>
+          <div style={{background:"#fff",borderRadius:16,padding:32,maxWidth:460,width:"100%",boxShadow:"0 24px 64px rgba(0,0,0,.25)",margin:"auto"}}>
+            {/* GAS URL 설정 */}
+            <div style={{fontSize:28,textAlign:"center",marginBottom:8}}>🔗</div>
+            <h2 style={{margin:"0 0 6px",fontSize:17,fontWeight:700,color:"#1e293b",textAlign:"center"}}>Google Sheets 연결</h2>
+            <p style={{margin:"0 0 16px",fontSize:13,color:"#64748b",textAlign:"center",lineHeight:1.6}}>Apps Script 배포 후 받은 <b>웹 앱 URL</b>을 붙여넣으세요.</p>
             <input value={setupInput} onChange={e=>setSI(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleSetup()}
-              placeholder="https://script.google.com/macros/s/.../exec"
-              style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:8,padding:"10px 12px",fontSize:13,outline:"none",marginBottom:10}}/>
-            <button onClick={handleSetup}
-              style={{width:"100%",padding:"11px 0",background:"#2563eb",color:"#fff",border:"none",borderRadius:8,fontSize:14,fontWeight:600,cursor:"pointer",marginBottom:8}}>
-              연결하기
-            </button>
-            {apiUrl&&<button onClick={()=>setSetup(false)} style={{width:"100%",padding:"9px 0",background:"#f8fafc",color:"#475569",border:"1px solid #e2e8f0",borderRadius:8,fontSize:13,cursor:"pointer",marginBottom:8}}>취소</button>}
-            <button onClick={()=>setSetup(false)} style={{width:"100%",padding:"7px 0",background:"none",border:"none",color:"#94a3b8",fontSize:12,cursor:"pointer"}}>
-              나중에 설정 (로컬 모드로 시작)
-            </button>
+              placeholder="https://script.google.com/macros/s/.../exec" style={{...inp2,marginBottom:10}}/>
+            <button onClick={handleSetup} style={{width:"100%",padding:"11px 0",background:"#2563eb",color:"#fff",border:"none",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer",marginBottom:8}}>연결하기</button>
+            {apiUrl&&<button onClick={()=>setSetup(false)} style={{width:"100%",padding:"9px 0",background:"#f8fafc",color:"#475569",border:"1px solid #e2e8f0",borderRadius:8,fontSize:13,cursor:"pointer",marginBottom:4}}>취소</button>}
+            {!apiUrl&&<button onClick={()=>setSetup(false)} style={{width:"100%",padding:"7px 0",background:"none",border:"none",color:"#94a3b8",fontSize:12,cursor:"pointer"}}>나중에 설정 (로컬 모드)</button>}
+
+            {/* 비밀번호 변경 */}
+            <div style={{marginTop:20,borderTop:"1px solid #e2e8f0",paddingTop:20}}>
+              <p style={{fontSize:14,fontWeight:600,color:"#1e293b",margin:"0 0 12px"}}>🔐 비밀번호 변경</p>
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                <input type="password" value={curPw} onChange={e=>setCurPw(e.target.value)} placeholder="현재 비밀번호" style={inp2}/>
+                <input type="password" value={newPw1} onChange={e=>setNP1(e.target.value)} placeholder="새 비밀번호 (4자 이상)" style={inp2}/>
+                <input type="password" value={newPw2} onChange={e=>setNP2(e.target.value)} placeholder="새 비밀번호 확인" style={inp2}
+                  onKeyDown={e=>e.key==="Enter"&&changePass()}/>
+              </div>
+              {pwMsg&&(
+                <div style={{marginTop:8,padding:"8px 12px",borderRadius:8,fontSize:12,fontWeight:500,
+                  background:pwMsg.t==="err"?"#fef2f2":"#f0fdf4",color:pwMsg.t==="err"?"#dc2626":"#16a34a",
+                  border:`1px solid ${pwMsg.t==="err"?"#fecaca":"#bbf7d0"}`}}>
+                  {pwMsg.m}
+                </div>
+              )}
+              <button onClick={changePass} style={{marginTop:10,width:"100%",padding:"9px 0",background:"#475569",color:"#fff",border:"none",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+                비밀번호 변경
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -212,18 +308,21 @@ function App(){
                 background:tab===t.id?"#2563eb":"transparent",color:tab===t.id?"#fff":"#475569"}}>{t.l}</button>
             ))}
           </nav>
-          <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
             <span style={{fontSize:11,color:syncC[sync],fontWeight:500}}>{syncL[sync]}</span>
             {lastSync&&<span style={{fontSize:10,color:"#94a3b8"}}>{lastSync.toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"})}</span>}
             <button onClick={()=>loadData(apiUrl)} title="새로고침" style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:6,padding:"5px 9px",cursor:"pointer",fontSize:13}}>🔄</button>
-            <button onClick={()=>{setSI(apiUrl);setSetup(true);}} title="API 설정" style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:6,padding:"5px 9px",cursor:"pointer",fontSize:13}}>⚙️</button>
+            <button onClick={()=>{setSI(apiUrl);setPwMsg(null);setSetup(true);}} title="설정" style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:6,padding:"5px 9px",cursor:"pointer",fontSize:13}}>⚙️</button>
+            <button onClick={logout} title="로그아웃"
+              style={{background:"#fff5f5",border:"1px solid #fecaca",borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:12,color:"#dc2626",fontWeight:500}}>
+              로그아웃
+            </button>
           </div>
         </div>
-        {/* API 미연결 배너 */}
         {!apiUrl&&(
           <div style={{background:"#fef9c3",borderTop:"1px solid #fde68a",padding:"6px 16px",textAlign:"center",fontSize:12,color:"#92400e"}}>
-            ⚠️ API 미연결 상태입니다. 데이터가 이 브라우저에만 저장됩니다.
-            <button onClick={()=>{setSI("");setSetup(true);}} style={{marginLeft:10,color:"#1d4ed8",background:"none",border:"none",cursor:"pointer",fontSize:12,fontWeight:600,textDecoration:"underline"}}>지금 연결하기</button>
+            ⚠️ API 미연결 상태 — 데이터가 이 브라우저에만 저장됩니다.
+            <button onClick={()=>{setSI("");setSetup(true);}} style={{marginLeft:10,color:"#1d4ed8",background:"none",border:"none",cursor:"pointer",fontSize:12,fontWeight:600,textDecoration:"underline"}}>지금 연결</button>
           </div>
         )}
       </header>
@@ -244,7 +343,7 @@ function App(){
 function Dashboard({teams,members,cats,issues}){
   const [days,setDays]=useState(14);
   const [sel,setSel]=useState(null);
-  const dr=getDates(days), tod=today(), thisMonth=tod.slice(0,7);
+  const dr=getDates(days),tod=today(),thisMonth=tod.slice(0,7);
   const monthIss=issues.filter(i=>i.date.startsWith(thisMonth));
   const withIss=new Set(monthIss.map(i=>i.memberId)).size;
   const getIss=(mId,d)=>issues.filter(i=>i.memberId===mId&&i.date===d);
@@ -252,7 +351,7 @@ function Dashboard({teams,members,cats,issues}){
   const getM=id=>members.find(m=>m.id===id);
   const getT=id=>teams.find(t=>t.id===id);
   const stats=[{l:"이번 달 이슈",v:monthIss.length,c:"#2563eb"},{l:"이슈 팀원 수",v:withIss,c:"#7c3aed"},{l:"전체 팀원",v:members.length,c:"#059669"},{l:"누적 이슈",v:issues.length,c:"#d97706"}];
-  const selIss=sel?getIss(sel.mId,sel.d):null, selM=sel?getM(sel.mId):null;
+  const selIss=sel?getIss(sel.mId,sel.d):null,selM=sel?getM(sel.mId):null;
   return(
     <div style={{display:"flex",flexDirection:"column",gap:20}}>
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
@@ -263,7 +362,6 @@ function Dashboard({teams,members,cats,issues}){
           </div>
         ))}
       </div>
-
       <div style={{background:"#fff",borderRadius:12,border:"1px solid #e2e8f0",padding:16,boxShadow:"0 1px 2px rgba(0,0,0,.04)"}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
           <span style={{fontWeight:600,color:"#1e293b"}}>📅 날짜별 HR 이슈 현황판</span>
@@ -276,11 +374,9 @@ function Dashboard({teams,members,cats,issues}){
             <thead>
               <tr style={{borderBottom:"1px solid #e2e8f0"}}>
                 <th style={{textAlign:"left",padding:"6px 10px 6px 0",fontWeight:500,color:"#94a3b8",width:160,whiteSpace:"nowrap"}}>팀 · 팀원</th>
-                {dr.map(d=>(
-                  <th key={d} style={{textAlign:"center",padding:"4px 2px",fontWeight:500,color:d===tod?"#2563eb":"#94a3b8",minWidth:28}}>
-                    <div>{fmtMD(d)}</div>{d===tod&&<div style={{fontSize:8,color:"#93c5fd"}}>●</div>}
-                  </th>
-                ))}
+                {dr.map(d=><th key={d} style={{textAlign:"center",padding:"4px 2px",fontWeight:500,color:d===tod?"#2563eb":"#94a3b8",minWidth:28}}>
+                  <div>{fmtMD(d)}</div>{d===tod&&<div style={{fontSize:8,color:"#93c5fd"}}>●</div>}
+                </th>)}
               </tr>
             </thead>
             <tbody>
@@ -338,7 +434,6 @@ function Dashboard({teams,members,cats,issues}){
           {cats.map(c=><div key={c.id} style={{display:"flex",alignItems:"center",gap:4,fontSize:11,color:"#64748b"}}><div style={{width:10,height:10,borderRadius:"50%",background:c.color}}/>{c.name}</div>)}
         </div>
       </div>
-
       <div style={{background:"#fff",borderRadius:12,border:"1px solid #e2e8f0",padding:16,boxShadow:"0 1px 2px rgba(0,0,0,.04)"}}>
         <p style={{fontWeight:600,color:"#1e293b",margin:"0 0 12px"}}>🕐 최근 이슈</p>
         {issues.length===0?(<p style={{color:"#94a3b8",textAlign:"center",padding:"24px 0",fontSize:13,margin:0}}>기록된 이슈가 없습니다.</p>):(
@@ -367,9 +462,8 @@ function IssueMgr({teams,members,cats,issues,upI}){
   const [showForm,setSF]=useState(false);
   const [editing,setEd]=useState(null);
   const [form,setForm]=useState({teamId:"",memberId:"",categoryId:"",date:today(),memo:""});
-  const [fTeam,setFT]=useState(""); const [fMem,setFM]=useState("");
-  const [fCat,setFC]=useState(""); const [fFrom,setFF]=useState(""); const [fTo,setFTo]=useState("");
-
+  const [fTeam,setFT]=useState("");const [fMem,setFM]=useState("");
+  const [fCat,setFC]=useState("");const [fFrom,setFF]=useState("");const [fTo,setFTo]=useState("");
   const openAdd=()=>{setEd(null);setForm({teamId:"",memberId:"",categoryId:"",date:today(),memo:""});setSF(true);};
   const startEdit=iss=>{const m=members.find(x=>x.id===iss.memberId);setEd(iss.id);setForm({teamId:m?.teamId||"",memberId:iss.memberId,categoryId:iss.categoryId,date:iss.date,memo:iss.memo||""});setSF(true);};
   const save=()=>{
@@ -380,7 +474,6 @@ function IssueMgr({teams,members,cats,issues,upI}){
     setSF(false);setEd(null);
   };
   const del=id=>{if(confirm("이슈를 삭제하시겠습니까?"))upI(issues.filter(i=>i.id!==id));};
-
   const filtered=issues.filter(i=>{
     const m=members.find(x=>x.id===i.memberId);
     if(fTeam&&m?.teamId!==fTeam)return false;
@@ -390,7 +483,6 @@ function IssueMgr({teams,members,cats,issues,upI}){
     if(fTo&&i.date>fTo)return false;
     return true;
   }).sort((a,b)=>b.date.localeCompare(a.date));
-
   const exportCSV=()=>{
     const rows=[["날짜","팀","이름","고용형태","카테고리","메모"],...filtered.map(i=>{
       const m=members.find(x=>x.id===i.memberId),t=teams.find(x=>x.id===m?.teamId),c=cats.find(x=>x.id===i.categoryId);
@@ -400,10 +492,8 @@ function IssueMgr({teams,members,cats,issues,upI}){
     const a=document.createElement("a");a.href=URL.createObjectURL(new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"}));
     a.download=`hr_issues_${today()}.csv`;a.click();
   };
-
   const inp={fontSize:13,border:"1px solid #e2e8f0",borderRadius:8,padding:"8px 12px",width:"100%",background:"#fff",color:"#1e293b",outline:"none"};
   const btn=(bg,fg,bo)=>({padding:"7px 16px",borderRadius:8,border:bo||"none",cursor:"pointer",fontSize:13,fontWeight:500,background:bg,color:fg});
-
   return(
     <div style={{display:"flex",flexDirection:"column",gap:14}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
@@ -413,32 +503,26 @@ function IssueMgr({teams,members,cats,issues,upI}){
           <button onClick={openAdd} style={btn("#2563eb","#fff")}>+ 이슈 추가</button>
         </div>
       </div>
-
       {showForm&&(
         <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:12,padding:16}}>
           <p style={{fontWeight:600,color:"#1e4ed8",fontSize:13,margin:"0 0 12px"}}>{editing?"이슈 수정":"새 이슈 기록"}</p>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-            {[["팀 선택","",teams.map(t=>({v:t.id,l:t.name})),"전체 팀",v=>setForm({...form,teamId:v,memberId:""}),form.teamId],
-              ["팀원 *","",members.filter(m=>!form.teamId||m.teamId===form.teamId).map(m=>({v:m.id,l:`${m.name} (${m.type})`})),"선택",v=>setForm({...form,memberId:v}),form.memberId],
-              ["카테고리 *","",cats.map(c=>({v:c.id,l:c.name})),"선택",v=>setForm({...form,categoryId:v}),form.categoryId],
-            ].map(([lbl,,opts,ph,fn,val],i)=>(
-              <div key={i}>
-                <label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:4}}>{lbl}</label>
-                <select value={val} onChange={e=>fn(e.target.value)} style={inp}>
-                  <option value="">{ph}</option>
-                  {opts.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
-                </select>
-              </div>
-            ))}
-            <div>
-              <label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:4}}>날짜 *</label>
-              <input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} style={inp}/>
-            </div>
-            <div style={{gridColumn:"1/-1"}}>
-              <label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:4}}>메모</label>
-              <textarea value={form.memo} onChange={e=>setForm({...form,memo:e.target.value})} rows={2}
-                placeholder="이슈 내용을 기록하세요…" style={{...inp,resize:"none"}}/>
-            </div>
+            <div><label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:4}}>팀 선택</label>
+              <select value={form.teamId} onChange={e=>setForm({...form,teamId:e.target.value,memberId:""})} style={inp}>
+                <option value="">전체 팀</option>{teams.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+              </select></div>
+            <div><label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:4}}>팀원 *</label>
+              <select value={form.memberId} onChange={e=>setForm({...form,memberId:e.target.value})} style={inp}>
+                <option value="">선택</option>{members.filter(m=>!form.teamId||m.teamId===form.teamId).map(m=><option key={m.id} value={m.id}>{m.name} ({m.type})</option>)}
+              </select></div>
+            <div><label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:4}}>카테고리 *</label>
+              <select value={form.categoryId} onChange={e=>setForm({...form,categoryId:e.target.value})} style={inp}>
+                <option value="">선택</option>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+              </select></div>
+            <div><label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:4}}>날짜 *</label>
+              <input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} style={inp}/></div>
+            <div style={{gridColumn:"1/-1"}}><label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:4}}>메모</label>
+              <textarea value={form.memo} onChange={e=>setForm({...form,memo:e.target.value})} rows={2} placeholder="이슈 내용을 기록하세요…" style={{...inp,resize:"none"}}/></div>
           </div>
           <div style={{display:"flex",gap:8,marginTop:12}}>
             <button onClick={save} style={btn("#2563eb","#fff")}>{editing?"수정 완료":"저장"}</button>
@@ -446,7 +530,6 @@ function IssueMgr({teams,members,cats,issues,upI}){
           </div>
         </div>
       )}
-
       <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:12,padding:"10px 14px",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
         <span style={{fontSize:11,color:"#94a3b8",fontWeight:600}}>필터</span>
         <select value={fTeam} onChange={e=>{setFT(e.target.value);setFM("");}} style={{fontSize:12,border:"1px solid #e2e8f0",borderRadius:8,padding:"4px 8px",color:"#475569",background:"#fff"}}>
@@ -464,7 +547,6 @@ function IssueMgr({teams,members,cats,issues,upI}){
         {(fTeam||fMem||fCat||fFrom||fTo)&&<button onClick={()=>{setFT("");setFM("");setFC("");setFF("");setFTo("");}} style={{fontSize:12,color:"#2563eb",background:"none",border:"none",cursor:"pointer",padding:0}}>초기화</button>}
         <span style={{fontSize:11,color:"#94a3b8",marginLeft:4}}>{filtered.length}건</span>
       </div>
-
       <div style={{background:"#fff",borderRadius:12,border:"1px solid #e2e8f0",boxShadow:"0 1px 2px rgba(0,0,0,.04)",overflow:"hidden"}}>
         {filtered.length===0?(<p style={{textAlign:"center",color:"#94a3b8",padding:"48px 0",fontSize:13,margin:0}}>기록된 이슈가 없습니다.</p>):(
           <div style={{overflowX:"auto"}}>
@@ -504,11 +586,10 @@ function IssueMgr({teams,members,cats,issues,upI}){
    MEMBER MANAGER
 ══════════════════════════════════════════════════════ */
 function MemberMgr({teams,members,upT,upM}){
-  const [etId,setET]=useState(null); const [etName,setEN]=useState("");
-  const [addT,setAT]=useState(false); const [newTN,setNT]=useState("");
-  const [addMT,setAMT]=useState(null); const [edMId,setEMI]=useState(null);
+  const [etId,setET]=useState(null);const [etName,setEN]=useState("");
+  const [addT,setAT]=useState(false);const [newTN,setNT]=useState("");
+  const [addMT,setAMT]=useState(null);const [edMId,setEMI]=useState(null);
   const [mf,setMF]=useState({name:"",type:"정규직"});
-
   const addTeam=()=>{if(!newTN.trim())return;upT([...teams,{id:uid(),name:newTN.trim()}]);setNT("");setAT(false);};
   const saveTeam=id=>{upT(teams.map(t=>t.id===id?{...t,name:etName}:t));setET(null);};
   const delTeam=id=>{if(!confirm("팀을 삭제하면 해당 팀원도 삭제됩니다. 계속하시겠습니까?"))return;upT(teams.filter(t=>t.id!==id));upM(members.filter(m=>m.teamId!==id));};
@@ -521,7 +602,6 @@ function MemberMgr({teams,members,upT,upM}){
   const delM=id=>{if(confirm("팀원을 삭제하시겠습니까?"))upM(members.filter(m=>m.id!==id));};
   const inp={fontSize:13,border:"1px solid #e2e8f0",borderRadius:8,padding:"6px 10px",background:"#fff",color:"#1e293b",outline:"none"};
   const btn=(bg,fg,bo)=>({padding:"6px 14px",borderRadius:8,border:bo||"none",cursor:"pointer",fontSize:13,fontWeight:500,background:bg,color:fg});
-
   return(
     <div style={{display:"flex",flexDirection:"column",gap:14}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
@@ -600,7 +680,7 @@ function MemberMgr({teams,members,upT,upM}){
    CATEGORY MANAGER
 ══════════════════════════════════════════════════════ */
 function CatMgr({cats,upC}){
-  const [editing,setEd]=useState(null); const [adding,setAdd]=useState(false);
+  const [editing,setEd]=useState(null);const [adding,setAdd]=useState(false);
   const [form,setForm]=useState({name:"",color:"#3b82f6"});
   const openAdd=()=>{setAdd(true);setEd(null);setForm({name:"",color:"#3b82f6"});};
   const startEdit=c=>{setEd(c.id);setForm({name:c.name,color:c.color});setAdd(false);};
@@ -621,19 +701,13 @@ function CatMgr({cats,upC}){
       {(adding||editing)&&(
         <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:12,padding:16,display:"flex",flexDirection:"column",gap:12}}>
           <p style={{fontWeight:600,color:"#1e4ed8",fontSize:13,margin:0}}>{editing?"카테고리 수정":"새 카테고리"}</p>
-          <div>
-            <label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:4}}>이름</label>
-            <input autoFocus value={form.name} onChange={e=>setForm({...form,name:e.target.value})} onKeyDown={e=>e.key==="Enter"&&save()} placeholder="카테고리 이름" style={inp}/>
-          </div>
-          <div>
-            <label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:8}}>색상</label>
+          <div><label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:4}}>이름</label>
+            <input autoFocus value={form.name} onChange={e=>setForm({...form,name:e.target.value})} onKeyDown={e=>e.key==="Enter"&&save()} placeholder="카테고리 이름" style={inp}/></div>
+          <div><label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:8}}>색상</label>
             <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-              {PALETTE.map(c=>(
-                <button key={c} onClick={()=>setForm({...form,color:c})}
-                  style={{width:28,height:28,borderRadius:"50%",border:form.color===c?"3px solid #475569":"3px solid transparent",cursor:"pointer",background:c,transform:form.color===c?"scale(1.15)":"scale(1)",transition:"all .15s"}}/>
-              ))}
-            </div>
-          </div>
+              {PALETTE.map(c=><button key={c} onClick={()=>setForm({...form,color:c})}
+                style={{width:28,height:28,borderRadius:"50%",border:form.color===c?"3px solid #475569":"3px solid transparent",cursor:"pointer",background:c,transform:form.color===c?"scale(1.15)":"scale(1)",transition:"all .15s"}}/>)}
+            </div></div>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
             <span style={{fontSize:11,color:"#94a3b8"}}>미리보기</span>
             <span style={{padding:"4px 12px",borderRadius:9999,color:"#fff",fontSize:13,background:form.color}}>{form.name||"카테고리명"}</span>
